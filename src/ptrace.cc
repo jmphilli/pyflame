@@ -44,14 +44,14 @@ namespace pyflame {
   }
 
 void PtraceAttach(pid_t pid) {
+  std::cout << "Before PTRACE_ATTACH:" << std::endl;
   print_status(pid);
-  std::cout << "PTRACE_ATTACH " << pid << std::endl;
   if (ptrace(PTRACE_ATTACH, pid, 0, 0)) {
     std::ostringstream ss;
     ss << "Failed to attach to PID " << pid << ": " << strerror(errno);
     throw PtraceException(ss.str());
   }
-  std::cout << "wait() " << pid << std::endl;
+  std::cout << "After PTRACE_ATTACH, before wait():" << std::endl;
   print_status(pid);
   int status;
   if (waitpid(pid, &status, 0) == -1) {
@@ -59,8 +59,9 @@ void PtraceAttach(pid_t pid) {
     ss << "Failed to wait on PID " << pid << ": " << strerror(errno);
     throw PtraceException(ss.str());
   }
-  std::cout << "status is " << status << std::endl;
+  std::cout << "After wait():" << std::endl;
   print_status(pid);
+  std::cout << "status is " << status << std::endl;
   std::cout << "done attach" << std::endl;
 }
 
