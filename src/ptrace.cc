@@ -33,17 +33,35 @@
 #include "./exc.h"
 
 namespace pyflame {
+
+  void print_status(pid_t pid) {
+    char buf[4096];
+    std::ostringstream os;
+    os << "/proc/" << pid << "/stat";
+    std::ifstream ifs(os.str());
+    ifs.getline(buf, sizeof(buf));
+    std::cout << buf << std::endl;
+  }
+
 void PtraceAttach(pid_t pid) {
+  print_status(pid);
+  std::cout << "PTRACE_ATTACH " << pid << std::endl;
   if (ptrace(PTRACE_ATTACH, pid, 0, 0)) {
     std::ostringstream ss;
     ss << "Failed to attach to PID " << pid << ": " << strerror(errno);
     throw PtraceException(ss.str());
   }
-  if (wait(nullptr) == -1) {
+  std::cout << "wait() " << pid << std::endl;
+  print_status(pid);
+  int status;
+  if (waitpid(pid, &status, 0) == -1) {
     std::ostringstream ss;
     ss << "Failed to wait on PID " << pid << ": " << strerror(errno);
     throw PtraceException(ss.str());
   }
+  std::cout << "status is " << status << std::endl;
+  print_status(pid);
+  std::cout << "done attach" << std::endl;
 }
 
 void PtraceDetach(pid_t pid) {
