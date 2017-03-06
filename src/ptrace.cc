@@ -100,7 +100,7 @@ long PtracePeek(pid_t pid, unsigned long addr) {
 static void do_wait(pid_t pid) {
   std::ostringstream ss;
   siginfo_t infop;
-  if (waitid(P_ALL, pid, &infop, __WALL) == -1) {
+  if (waitid(P_ALL, pid, &infop, WSTOPPED | __WALL) == -1) {
     ss << "Failed to waitid() on pid " << pid << ": " << strerror(errno);
     throw PtraceException(ss.str());
   }
