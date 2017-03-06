@@ -98,23 +98,15 @@ long PtracePeek(pid_t pid, unsigned long addr) {
 }
 
 static void do_wait(pid_t pid) {
-  int status;
-  if (waitpid(pid, &status, 0) == -1) {
+  siginfo_t infop;
+  if (waitid(P_PID, pid, &infop, __WALL) == -1) {
     std::ostringstream ss;
-    ss << "Failed to waitpid(): " << strerror(errno);
+    ss << "Failed to waitid() on pid " << pid << ": " << strerror(errno);
     throw PtraceException(ss.str());
   }
-  if (WIFSTOPPED(status)) {
-    int signum = WSTOPSIG(status);
-    if (signum != SIGTRAP) {
-      std::ostringstream ss;
-      ss << "Failed to waitpid(), unexpectedly got status: "
-         << strsignal(signum);
-      throw PtraceException(ss.str());
-    }
-  } else {
+  if (infop.si_status != CLD_STOPPED) {
     std::ostringstream ss;
-    ss << "Failed to waitpid(), unexpectedly got status: " << status;
+    ss << "Expected waitid() for pid " << pid << " to yield CLD_STOPPED";
     throw PtraceException(ss.str());
   }
 }
