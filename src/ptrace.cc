@@ -98,15 +98,18 @@ long PtracePeek(pid_t pid, unsigned long addr) {
 }
 
 static void do_wait(pid_t pid) {
+  std::ostringstream ss;
   siginfo_t infop;
-  if (waitid(P_PID, pid, &infop, __WALL) == -1) {
-    std::ostringstream ss;
+  if (waitid(P_ALL, pid, &infop, __WALL) == -1) {
     ss << "Failed to waitid() on pid " << pid << ": " << strerror(errno);
     throw PtraceException(ss.str());
   }
   if (infop.si_status != CLD_STOPPED) {
-    std::ostringstream ss;
     ss << "Expected waitid() for pid " << pid << " to yield CLD_STOPPED";
+    throw PtraceException(ss.str());
+  }
+  if (infop.si_pid != pid) {
+    ss << "Expected waitid() to return pid " << pid << ", instead got " << infop.si_pid;
     throw PtraceException(ss.str());
   }
 }
