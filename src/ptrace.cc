@@ -33,47 +33,47 @@
 #include "./exc.h"
 
 namespace pyflame {
-void PtraceAttach(pid_t pid) {
+
+static long syscall_code = 0x050f;  // syscall
+
+void PtraceCtx::PtraceCtx(pid_t pid) : pid_(pid), probe_(0) {
+  std::ostringstream ss;
   if (ptrace(PTRACE_ATTACH, pid, 0, 0)) {
-    std::ostringstream ss;
     ss << "Failed to attach to PID " << pid << ": " << strerror(errno);
     throw PtraceException(ss.str());
   }
   if (wait(nullptr) == -1) {
-    std::ostringstream ss;
     ss << "Failed to wait on PID " << pid << ": " << strerror(errno);
     throw PtraceException(ss.str());
   }
 }
 
-void PtraceDetach(pid_t pid) {
-  if (ptrace(PTRACE_DETACH, pid, 0, 0)) {
+void PtraceCtx::~PtraceCtx() {
+  if (ptrace(PTRACE_DETACH, pid_, 0, 0)) {
     std::ostringstream ss;
-    ss << "Failed to detach PID " << pid << ": " << strerror(errno);
+    ss << "Failed to detach PID " << pid_ << ": " << strerror(errno);
     throw PtraceException(ss.str());
   }
 }
 
-struct user_regs_struct PtraceGetRegs(pid_t pid) {
-  struct user_regs_struct regs;
-  if (ptrace(PTRACE_GETREGS, pid, 0, &regs)) {
+void PtraceCtx::GetRegs(user_regs_struct *regs) {
+  if (ptrace(PTRACE_GETREGS, pid_, 0, regs)) {
     std::ostringstream ss;
     ss << "Failed to PTRACE_GETREGS: " << strerror(errno);
     throw PtraceException(ss.str());
   }
-  return regs;
 }
 
-void PtraceSetRegs(pid_t pid, struct user_regs_struct regs) {
-  if (ptrace(PTRACE_SETREGS, pid, 0, &regs)) {
+void PtraceCtx::SetRegs(struct user_regs_struct *regs) {
+  if (ptrace(PTRACE_SETREGS, pid_, 0, regs)) {
     std::ostringstream ss;
     ss << "Failed to PTRACE_SETREGS: " << strerror(errno);
     throw PtraceException(ss.str());
   }
 }
 
-void PtracePoke(pid_t pid, unsigned long addr, long data) {
-  if (ptrace(PTRACE_POKEDATA, pid, addr, (void *)data)) {
+void PtraceCtx::Poke(unsigned long addr, long data) {
+  if (ptrace(PTRACE_POKEDATA, pid_, addr, (void *)data)) {
     std::ostringstream ss;
     ss << "Failed to PTRACE_POKEDATA at " << reinterpret_cast<void *>(addr)
        << ": " << strerror(errno);
@@ -81,7 +81,7 @@ void PtracePoke(pid_t pid, unsigned long addr, long data) {
   }
 }
 
-long PtracePeek(pid_t pid, unsigned long addr) {
+long PtraceCtx::Peek(unsigned long addr) {
   errno = 0;
   const long data = ptrace(PTRACE_PEEKDATA, pid, addr, 0);
   if (data == -1 && errno != 0) {
@@ -93,7 +93,7 @@ long PtracePeek(pid_t pid, unsigned long addr) {
   return data;
 }
 
-void do_wait() {
+static void do_wait() {
   int status;
   if (wait(&status) == -1) {
     throw PtraceException("Failed to PTRACE_CONT");
@@ -112,21 +112,21 @@ void do_wait() {
   }
 }
 
-void PtraceCont(pid_t pid) {
-  ptrace(PTRACE_CONT, pid, 0, 0);
+void PtraceCtx::Cont() {
+  ptrace(PTRACE_CONT, pid_, 0, 0);
   do_wait();
 }
 
-void PtraceSingleStep(pid_t pid) {
-  ptrace(PTRACE_SINGLESTEP, pid, 0, 0);
+void PtraceCtx::SingleStep() {
+  ptrace(PTRACE_SINGLESTEP, pid_, 0, 0);
   do_wait();
 }
 
-std::string PtracePeekString(pid_t pid, unsigned long addr) {
+std::string PtracePeekString(unsigned long addr) {
   std::ostringstream dump;
   unsigned long off = 0;
   while (true) {
-    const long val = PtracePeek(pid, addr + off);
+    const long val = Peek(addr + off);
 
     // XXX: this can be micro-optimized, c.f.
     // https://graphics.stanford.edu/~seander/bithacks.html#ZeroInWord
@@ -140,8 +140,8 @@ std::string PtracePeekString(pid_t pid, unsigned long addr) {
   return dump.str();
 }
 
-std::unique_ptr<uint8_t[]> PtracePeekBytes(pid_t pid, unsigned long addr,
-                                           size_t nbytes) {
+std::unique_ptr<uint8_t[]> PtraceCtx::PeekBytes(unsigned long addr,
+                                                size_t nbytes) {
   // align the buffer to a word size
   if (nbytes % sizeof(long)) {
     nbytes = (nbytes / sizeof(long) + 1) * sizeof(long);
@@ -157,15 +157,10 @@ std::unique_ptr<uint8_t[]> PtracePeekBytes(pid_t pid, unsigned long addr,
   return bytes;
 }
 
-#ifdef __amd64__
-
-static unsigned long probe_ = 0;
-
-static unsigned long AllocPage(pid_t pid) {
-  user_regs_struct oldregs = PtraceGetRegs(pid);
-  long code = 0x050f;  // syscall
-  long orig_code = PtracePeek(pid, oldregs.rip);
-  PtracePoke(pid, oldregs.rip, code);
+unsigned long PtraceCtx::AllocPage() {
+  user_regs_struct oldregs = GetRegs();
+  long orig_code = Peek(oldregs.rip);
+  Poke(oldregs.rip, syscall_code);
 
   user_regs_struct newregs = oldregs;
   newregs.rax = SYS_mmap;
@@ -175,20 +170,24 @@ static unsigned long AllocPage(pid_t pid) {
   newregs.r10 = MAP_PRIVATE | MAP_ANONYMOUS;         // flags
   newregs.r8 = -1;                                   // fd
   newregs.r9 = 0;                                    // offset
-  PtraceSetRegs(pid, newregs);
-  PtraceSingleStep(pid);
-  unsigned long result = PtraceGetRegs(pid).rax;
+  SetRegs(&newregs);
+  SingleStep();
+  unsigned long result = GetRegs().rax;
 
-  PtraceSetRegs(pid, oldregs);
-  PtracePoke(pid, oldregs.rip, orig_code);
+  SetRegs(&oldregs);
+  Poke(oldregs.rip, orig_code);
 
   return result;
 }
 
-static std::vector<pid_t> ListThreads(pid_t pid) {
+void PtraceCtx::DeallocPage() {
+  // TODO
+}
+
+std::vector<pid_t> PtraceCtx::ListThreads() {
   std::vector<pid_t> result;
   std::ostringstream dirname;
-  dirname << "/proc/" << pid << "/task";
+  dirname << "/proc/" << pid_ << "/task";
   DIR *dir = opendir(dirname.str().c_str());
   if (dir == nullptr) {
     throw PtraceException("Failed to list threads");
@@ -203,23 +202,23 @@ static std::vector<pid_t> ListThreads(pid_t pid) {
   return result;
 }
 
-static void PauseChildThreads(pid_t pid) {
-  for (auto tid : ListThreads(pid)) {
-    if (tid != pid) PtraceAttach(tid);
+void PtraceCtx::PauseChildThreads() {
+  for (auto tid : ListThreads(pid_)) {
+    if (tid != pid_) PtraceAttach(tid);
   }
 }
 
-static void ResumeChildThreads(pid_t pid) {
-  for (auto tid : ListThreads(pid)) {
-    if (tid != pid) PtraceDetach(tid);
+void PtraceCtx::ResumeChildThreads() {
+  for (auto tid : ListThreads(pid_)) {
+    if (tid != pid_) PtraceDetach(tid);
   }
 }
 
-long PtraceCallFunction(pid_t pid, unsigned long addr) {
+long PtraceCtx::CallFunction(unsigned long addr) {
   if (probe_ == 0) {
-    PauseChildThreads(pid);
-    probe_ = AllocPage(pid);
-    ResumeChildThreads(pid);
+    PauseChildThreads();
+    probe_ = AllocPage();
+    ResumeChildThreads();
     if (probe_ == (unsigned long)MAP_FAILED) {
       return -1;
     }
@@ -231,19 +230,19 @@ long PtraceCallFunction(pid_t pid, unsigned long addr) {
     new_code_bytes[0] = 0xff;  // CALL
     new_code_bytes[1] = 0xd0;  // rax
     new_code_bytes[2] = 0xcc;  // TRAP
-    PtracePoke(pid, probe_, code);
+    Poke(probe_, code);
   }
 
-  user_regs_struct oldregs = PtraceGetRegs(pid);
+  user_regs_struct oldregs = GetRegs();
   user_regs_struct newregs = oldregs;
   newregs.rax = addr;
   newregs.rip = probe_;
 
-  PtraceSetRegs(pid, newregs);
-  PtraceCont(pid);
+  SetRegs(newregs);
+  Cont();
 
-  newregs = PtraceGetRegs(pid);
-  PtraceSetRegs(pid, oldregs);
+  newregs = GetRegs();
+  SetRegs(oldregs);
   return newregs.rax;
 };
 #endif

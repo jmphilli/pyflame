@@ -22,39 +22,43 @@
 #include <string>
 
 namespace pyflame {
-// attach to a process
-void PtraceAttach(pid_t pid);
 
-// detach a process
-void PtraceDetach(pid_t pid);
+class PtraceCtx {
+ public:
+  PtraceCtx(pid_t pid);
+  ~PtraceCtx();
 
-// get regs from a process
-struct user_regs_struct PtraceGetRegs(pid_t pid);
+  // get regs from a process
+  void GetRegs(user_regs_struct *regs);
 
-// set regs in a process
-void PtraceSetRegs(pid_t pid, struct user_regs_struct regs);
+  // set regs for the process
+  void SetRegs(user_regs_struct *regs);
 
-// poke a long word into an address
-void PtracePoke(pid_t pid, unsigned long addr, long data);
+  void Poke(unsigned long addr, long data);
 
-// read the long word at an address
-long PtracePeek(pid_t pid, unsigned long addr);
+  long Peek(unsigned long addr);
 
-// peek a null-terminated string
-std::string PtracePeekString(pid_t pid, unsigned long addr);
+  void Cont();
 
-// peek some number of bytes
-std::unique_ptr<uint8_t[]> PtracePeekBytes(pid_t pid, unsigned long addr,
-                                           size_t nbytes);
+  void SingleStep();
 
-// Continue a traced process
-void PtraceCont(pid_t pid);
+  std::string PeekString(unsigned long addr);
 
-// Execute a single instruction in a traced process
-void PtraceSingleStep(pid_t pid);
+  std::unique_ptr<uint8_t[]> PeekBytes(unsigned long addr, size_t nbytes);
 
-#ifdef __amd64__
-// call a function pointer
-long PtraceCallFunction(pid_t pid, unsigned long addr);
-#endif
+  // call a function pointer
+  long PtraceCallFunction(unsigned long addr);
+
+ private:
+  pid_t pid_;
+  unsigned long probe_;
+
+  unsigned long AllocPage();
+  void DeallocPage();
+
+  std::vector<pid_t> ListThreads();
+
+  void PauseChildThreads();
+  void ResumeChildThreads();
+};
 }  // namespace pyflame
